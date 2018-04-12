@@ -1,10 +1,8 @@
 'use strict';
 
-const path = require('path');
 const _ = require('lodash');
 const semver = require('semver');
 
-const stacksMap = require('./lib/stacks-map');
 const migrateExistingResources = require('./lib/migrate-existing-resources');
 const migrateNewResources = require('./lib/migrate-new-resources');
 const replaceReferences = require('./lib/replace-references');
@@ -41,20 +39,9 @@ class ServerlessPluginSplitStacks {
       { logSummary }
     );
 
-    // Load eventual stacks map customizations
-    const customizationsPath = path.resolve(serverless.config.servicePath, 'stacks-map.js');
-    try {
-      require(customizationsPath)
-    } catch (e) {
-      // If module not found ignore, otherwise crash
-      if (e.code !== 'MODULE_NOT_FOUND' || !e.message.endsWith(`'${customizationsPath}'`)) {
-        throw e;
-      }
-    }
-  }
+    const custom = this.serverless.service.custom || {};
 
-  static resolveMigration(resource) {
-    return this.stacksMap[resource.Type];
+    this.config = custom.splitStacks || {};
   }
 
   split() {
@@ -65,33 +52,38 @@ class ServerlessPluginSplitStacks {
 
     return Promise.resolve()
       .then(() => this.migrateExistingResources())
-      .then(() => this.migrateNewResources())
-      .then(() => this.replaceReferences())
-      .then(() => this.replaceOutputs())
-      .then(() => this.mergeStackResources())
-      .then(() => this.writeNestedStacks())
-      .then(() => this.logSummary());
+  .then(() => this.migrateNewResources())
+  .then(() => this.replaceReferences())
+  .then(() => this.replaceOutputs())
+  .then(() => this.mergeStackResources())
+  .then(() => this.writeNestedStacks())
+  .then(() => this.logSummary());
   }
 
   upload() {
+    const deploymentBucketObject = this.serverless.service.provider.deploymentBucketObject;
+
     return this.provider.getServerlessDeploymentBucketName(this.options.stage, this.options.region)
       .then(deploymentBucket => {
-        const files = this.getNestedStackFiles();
+      const files = this.getNestedStackFiles();
 
-        return Promise.all(_.map(files, file => {
-          const params = {
-            Bucket: deploymentBucket,
-            Key: file.key,
-            Body: file.createReadStream(),
-            ContentType: 'application/json',
-          };
+    return Promise.all(_.map(files, file => {
+      const params = {
+        Bucket: deploymentBucket,
+        Key: file.key,
+        Body: file.createReadStream(),
+        ContentType: 'application/json',
+      };
 
-          return this.provider.request('S3', 'putObject', params);
-        }));
-      });
+    if (deploymentBucketObject) {
+      const encryptionParams = this.getEncryptionParams(deploymentBucketObject);
+      Object.assign(params, encryptionParams);
+    }
+
+    return this.provider.request('S3', 'putObject', params);
+  }));
+  });
   }
 }
-
-ServerlessPluginSplitStacks.stacksMap = stacksMap;
 
 module.exports = ServerlessPluginSplitStacks;
